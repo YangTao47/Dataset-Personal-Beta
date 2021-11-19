@@ -53,7 +53,7 @@ a = time.gmtime().tm_sec
 #设置随机数种子
 ia.seed(time.gmtime().tm_sec)
 
-def bounding_box_example():
+def dataEnforce():
     #读取图片
     img = cv2.imread("C:\\Users\\Leaper\\Desktop\\train\\105.jpg")
     #变换通道
@@ -70,12 +70,21 @@ def bounding_box_example():
         BoundingBox(x1=bodbx[1][0][0], y1=bodbx[1][0][1], x2=bodbx[1][1][0], y2=bodbx[1][1][1])
     ],shape=img.shape)
     #数据增强
-    seq = iaa.Sequential([
+    seq = iaa.SomeOf(4,[
         iaa.LinearContrast((0.5, 1.5)),
         iaa.Fliplr(0.5),
-        iaa.GaussianBlur(sigma=(0, 1.0)),
+        iaa.Flipud(0.5),
+        iaa.ImpulseNoise(0.05),
+        iaa.Salt(0.1),
+        #iaa.CoarsePepper(0.05, size_percent=(0.01, 0.1)),随机裁剪
+        iaa.BlendAlpha( (0.0, 1.0),foreground=iaa.Add(50), background=iaa.Multiply(0.2)),
+        iaa.MultiplyAndAddToBrightness(mul=(0.5, 1.5), add=(-30, 30)),
+        iaa.GaussianBlur(sigma=(0, 3.0)),
+        iaa.AverageBlur(k=((5, 11), (1, 3))),
         iaa.Multiply((0.8, 1.2), per_channel=0.2),
-        iaa.AdditiveGaussianNoise(loc=0,scale=(0.0,0.05*255),per_channel=0.5),
+        iaa.AdditiveGaussianNoise(loc=0,scale=(0.0,0.2*255),per_channel=0.5),
+        iaa.ScaleX((0.8, 1.2)),
+        iaa.ScaleY((0.8, 1.2)),
         iaa.Affine(scale={"x":(0.8,1.2),"y":(0.8,1.2)},
                    rotate=(-180, 180),
                    shear=(-8,8)) ],random_order=True)
@@ -87,8 +96,9 @@ def bounding_box_example():
     img_after = bbs_aug.draw_on_image(img_aug,size=2,color=[255,0,0])
     img_after = kps_aug.draw_on_image(img_after,size=2,color=[255,0,0])
     ia.show_grid([img_before,img_after],rows=1,cols=2)
+    b = 1
 
 
 for i in range(10):
-    bounding_box_example()
+    dataEnforce()
 

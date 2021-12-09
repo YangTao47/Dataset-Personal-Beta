@@ -1,3 +1,12 @@
+''''*!
+    * \date 2021/12/4
+    *
+    * \author Yang, Tao
+    * Contact: 627871875@qq.com
+    *
+    *
+    * \note
+*'''
 from imgaug.augmentables.bbs import BoundingBox, BoundingBoxesOnImage
 import cv2
 import imgaug as ia

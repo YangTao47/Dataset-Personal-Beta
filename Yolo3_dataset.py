@@ -1,107 +1,163 @@
+''''*!
+    * \date 2021/12/4
+    *
+    * \author Yang, Tao
+    * Contact: 627871875@qq.com
+    *
+    *
+    * \note
+*'''
 import numpy as np
 import json
-''''*!
- * file Yolo3-dataset   output 32x32  three-anchor
- * date 2018/03/26
- *
- * author Yang, Tao
- * Contact: 627871875@qq.com
- *
- *
- * note
-*'''
+import tensorflow as tf
+from keras import backend as K
+from keras.models import Model
+
 # from yolo3 import model
 
 path = 'D:/dataset/train.json'
 
-'''                                   reference                                                         '''
-def get_random_data(annotation_line, input_shape, random=True, max_boxes=20, jitter=.3, hue=.1, sat=1.5, val=1.5,
-                    proc_img=True):
-    '''random preprocessing for real-time data augmentation'''
-    line = annotation_line.split()
-    image = Image.open(line[0])
-    iw, ih = image.size
-    h, w = input_shape
-    box = np.array([np.array(list(map(int, box.split(',')))) for box in line[1:]])  # [x,y,w,h]
 
-    if not random:
-        # resize image
-        scale = min(w / iw, h / ih)
-        nw = int(iw * scale)
-        nh = int(ih * scale)
-        dx = (w - nw) // 2
-        dy = (h - nh) // 2
-        image_data = 0
-        if proc_img:
-            image = image.resize((nw, nh), Image.BICUBIC)
-            new_image = Image.new('RGB', (w, h), (128, 128, 128))
-            new_image.paste(image, (dx, dy))
-            image_data = np.array(new_image) / 255.
+def box_iou(b1, b2):
+    '''Return iou tensor
 
-        # correct boxes
-        box_data = np.zeros((max_boxes, 5))
-        if len(box) > 0:
-            np.random.shuffle(box)
-            if len(box) > max_boxes: box = box[:max_boxes]
-            box[:, [0, 2]] = box[:, [0, 2]] * scale + dx
-            box[:, [1, 3]] = box[:, [1, 3]] * scale + dy
-            box_data[:len(box)] = box
+    Parameters
+    ----------
+    b1: tensor, shape=(i1,...,iN, 4), xywh
+    b2: tensor, shape=(j, 4), xywh
 
-        return image_data, box_data
+    Returns
+    -------
+    iou: tensor, shape=(i1,...,iN, j)
 
-    # resize image
-    new_ar = w / h * rand(1 - jitter, 1 + jitter) / rand(1 - jitter, 1 + jitter)
-    scale = rand(.25, 2)
-    if new_ar < 1:
-        nh = int(scale * h)
-        nw = int(nh * new_ar)
-    else:
-        nw = int(scale * w)
-        nh = int(nw / new_ar)
-    image = image.resize((nw, nh), Image.BICUBIC)
+    '''
 
-    # place image
-    dx = int(rand(0, w - nw))
-    dy = int(rand(0, h - nh))
-    new_image = Image.new('RGB', (w, h), (128, 128, 128))
-    new_image.paste(image, (dx, dy))
-    image = new_image
+    # Expand dim to apply broadcasting.
+    b1 = K.expand_dims(b1, -2)
+    b1_xy = b1[..., :2]
+    b1_wh = b1[..., 2:4]
+    b1_wh_half = b1_wh / 2.
+    b1_mins = b1_xy - b1_wh_half
+    b1_maxes = b1_xy + b1_wh_half
 
-    # flip image or not
-    flip = rand() < .5
-    if flip: image = image.transpose(Image.FLIP_LEFT_RIGHT)
+    # Expand dim to apply broadcasting.
+    b2 = K.expand_dims(b2, 0)
+    b2_xy = b2[..., :2]
+    b2_wh = b2[..., 2:4]
+    b2_wh_half = b2_wh / 2.
+    b2_mins = b2_xy - b2_wh_half
+    b2_maxes = b2_xy + b2_wh_half
 
-    # distort image
-    hue = rand(-hue, hue)
-    sat = rand(1, sat) if rand() < .5 else 1 / rand(1, sat)
-    val = rand(1, val) if rand() < .5 else 1 / rand(1, val)
-    x = rgb_to_hsv(np.array(image) / 255.)
-    x[..., 0] += hue
-    x[..., 0][x[..., 0] > 1] -= 1
-    x[..., 0][x[..., 0] < 0] += 1
-    x[..., 1] *= sat
-    x[..., 2] *= val
-    x[x > 1] = 1
-    x[x < 0] = 0
-    image_data = hsv_to_rgb(x)  # numpy array, 0 to 1
+    intersect_mins = K.maximum(b1_mins, b2_mins)
+    intersect_maxes = K.minimum(b1_maxes, b2_maxes)
+    intersect_wh = K.maximum(intersect_maxes - intersect_mins, 0.)
+    intersect_area = intersect_wh[..., 0] * intersect_wh[..., 1]
+    b1_area = b1_wh[..., 0] * b1_wh[..., 1]
+    b2_area = b2_wh[..., 0] * b2_wh[..., 1]
+    iou = intersect_area / (b1_area + b2_area - intersect_area)
 
-    # correct boxes
-    box_data = np.zeros((max_boxes, 5))
-    if len(box) > 0:
-        np.random.shuffle(box)
-        box[:, [0, 2]] = box[:, [0, 2]] * nw / iw + dx
-        box[:, [1, 3]] = box[:, [1, 3]] * nh / ih + dy
-        if flip: box[:, [0, 2]] = w - box[:, [2, 0]]
-        box[:, 0:2][box[:, 0:2] < 0] = 0
-        box[:, 2][box[:, 2] > w] = w
-        box[:, 3][box[:, 3] > h] = h
-        box_w = box[:, 2] - box[:, 0]
-        box_h = box[:, 3] - box[:, 1]
-        box = box[np.logical_and(box_w > 1, box_h > 1)]  # discard invalid box
-        if len(box) > max_boxes: box = box[:max_boxes]
-        box_data[:len(box)] = box
+    return iou
 
-    return image_data, box_data
+
+def yolo_head(feats, anchors, num_classes, input_shape, calc_loss=False):
+    """Convert final layer features to bounding box parameters."""
+    num_anchors = len(anchors)
+    # Reshape to batch, height, width, num_anchors, box_params.
+    anchors_tensor = K.reshape(K.constant(anchors), [1, 1, 1, num_anchors, 2])
+
+    grid_shape = K.shape(feats)[1:3]  # height, width
+    grid_y = K.tile(K.reshape(K.arange(0, stop=grid_shape[0]), [-1, 1, 1, 1]), [1, grid_shape[1], 1, 1])
+    grid_x = K.tile(K.reshape(K.arange(0, stop=grid_shape[1]), [1, -1, 1, 1]), [grid_shape[0], 1, 1, 1])
+    grid = K.concatenate([grid_x, grid_y])
+    grid = K.cast(grid, np.float32)
+
+    feats = K.reshape(
+        feats, [-1, grid_shape[0], grid_shape[1], num_anchors, num_classes + 5])
+
+    # Adjust preditions to each spatial grid point and anchor size.
+    box_xy = (K.sigmoid(feats[..., :2]) + grid) / K.cast(grid_shape[::-1], np.float32)
+    box_wh = K.exp(feats[..., 2:4]) * anchors_tensor / K.cast(input_shape[::-1], np.float32)
+    box_confidence = K.sigmoid(feats[..., 4:5])
+    box_class_probs = K.sigmoid(feats[..., 5:])
+
+    if calc_loss == True:
+        return grid, feats, box_xy, box_wh
+    return box_xy, box_wh, box_confidence, box_class_probs
+
+
+def yolo_loss(yolo_outputs, y_true, anchors, num_classes, ignore_thresh=.5, print_loss=False):
+    '''Return yolo_loss tensor
+
+    Parameters
+    ----------
+    yolo_outputs: list of tensor, the output of yolo_body or tiny_yolo_body
+    y_true: list of array, the output of preprocess_true_boxes
+    anchors: array, shape=(N, 2), wh
+    num_classes: integer
+    ignore_thresh: float, the iou threshold whether to ignore object confidence loss
+
+    Returns
+    -------
+    loss: tensor, shape=(1,)
+
+    '''
+    num_layers = len(anchors) // 3  # default setting
+    # yolo_outputs = args[:num_layers]
+    # y_true = args[num_layers:]
+    a = K.shape(yolo_outputs)[1:3] * 8
+    # TODO 这里的input——shape 没那么简单
+    input_shape = K.cast(K.shape(yolo_outputs)[1:3] * 8, np.float32)
+    grid_shapes = [K.cast(K.shape(yolo_outputs)[1:3], np.float32)]
+    loss = 0
+    m = K.shape(yolo_outputs)[0]  # batch size, tensor
+    mf = K.cast(m, np.float32)
+
+    object_mask = y_true[..., 4:5]  # confidence
+    true_class_probs = y_true[..., 5:]  # class
+    grid, raw_pred, pred_xy, pred_wh = yolo_head(yolo_outputs,
+                                                 anchors[0:3], num_classes, input_shape, calc_loss=True)
+    pred_box = K.concatenate([pred_xy, pred_wh])
+
+    # Darknet raw box to calculate loss.
+    a = y_true[..., :2]
+    raw_true_xy = y_true[..., :2] * grid_shapes[::-1] - grid
+    raw_true_wh = K.log(y_true[..., 2:4] / anchors[0:3] * input_shape[::-1])
+    raw_true_wh = K.switch(object_mask, raw_true_wh, K.zeros_like(raw_true_wh))  # avoid log(0)=-inf
+    box_loss_scale = 2 - y_true[..., 2:3] * y_true[..., 3:4]  # area
+
+    # Find ignore mask, iterate over each of batch.
+    ignore_mask = tf.TensorArray(np.float32, size=1, dynamic_size=True)  # all images label
+    object_mask_bool = K.cast(object_mask, 'bool')
+
+    def loop_body(b, ignore_mask):
+        true_box = tf.boolean_mask(y_true[b, ..., 0:4], object_mask_bool[b, ..., 0])  # object_mask_bool (confidence)
+        iou = box_iou(pred_box[b], true_box)
+        best_iou = K.max(iou, axis=-1)
+        ignore_mask = ignore_mask.write(b, K.cast(best_iou < ignore_thresh, K.dtype(true_box)))
+        return b + 1, ignore_mask
+
+    _, ignore_mask = tf.while_loop(lambda b, *args: b < m, loop_body, [0, ignore_mask])
+    ignore_mask = ignore_mask.stack()
+    ignore_mask = K.expand_dims(ignore_mask, -1)
+
+    # K.binary_crossentropy is helpful to avoid exp overflow.
+    xy_loss = object_mask * box_loss_scale * K.binary_crossentropy(raw_true_xy, raw_pred[..., 0:2],
+                                                                   from_logits=True)
+    wh_loss = object_mask * box_loss_scale * 0.5 * K.square(raw_true_wh - raw_pred[..., 2:4])
+    confidence_loss = object_mask * K.binary_crossentropy(object_mask, raw_pred[..., 4:5], from_logits=True) + \
+                      (1 - object_mask) * K.binary_crossentropy(object_mask, raw_pred[..., 4:5],
+                                                                from_logits=True) * ignore_mask
+    class_loss = object_mask * K.binary_crossentropy(true_class_probs, raw_pred[..., 5:], from_logits=True)
+
+    xy_loss = K.sum(xy_loss) / mf
+    wh_loss = K.sum(wh_loss) / mf
+    confidence_loss = K.sum(confidence_loss) / mf
+    class_loss = K.sum(class_loss) / mf
+    loss += xy_loss + wh_loss + confidence_loss + class_loss
+    if print_loss:
+        loss = tf.print(loss, [loss, xy_loss, wh_loss, confidence_loss, class_loss, K.sum(ignore_mask)],
+                        message='loss: ')
+    return loss
 
 
 def preprocess_true_boxes(true_boxes, input_shape, anchors, num_classes):
@@ -126,7 +182,7 @@ def preprocess_true_boxes(true_boxes, input_shape, anchors, num_classes):
     true_boxes = np.array(true_boxes, dtype='float32')
     input_shape = np.array(input_shape, dtype='int32')
     boxes_xy = (true_boxes[..., 0:2] + true_boxes[..., 2:4]) // 2
-    boxes_wh = true_boxes[..., 2:4] - true_boxes[..., 0:2]  # shape=(m, T, 2)
+    boxes_wh = true_boxes[..., 2:4] - true_boxes[..., 0:2]  # shape=(m, 5, 2)
 
     m = true_boxes.shape[0]  # 图片数量
     # grid_shapes = [input_shape // {0: 32, 1: 16, 2: 8}[l] for l in range(num_layers)]
@@ -138,14 +194,14 @@ def preprocess_true_boxes(true_boxes, input_shape, anchors, num_classes):
     anchors = np.expand_dims(anchors, 0)  # dims = 1 3 2
     anchor_maxes = anchors / 2.  # 这里还有3个anchor
     anchor_mins = -anchor_maxes
-    valid_mask = boxes_wh[..., 0] > 0
+    valid_mask = boxes_wh[..., 0] > 0 #(m,5)
 
     for b in range(m):
-        # 归一化
-        true_boxes[..., 0:2] = boxes_xy / input_shape[b, 0]
-        true_boxes[..., 2:4] = boxes_wh / input_shape[b, 1]
+        # 归一化 + 缩放比例
+        true_boxes[..., 0:2] = (boxes_xy / input_shape[b, 0]) * (256 /input_shape[b, 0])
+        true_boxes[..., 2:4] = (boxes_wh / input_shape[b, 1]) * (256 /input_shape[b, 0])
         # Discard zero rows.
-        wh = boxes_wh[b, valid_mask[b]]  # num_ground_box 2
+        wh = boxes_wh[b, valid_mask[b]] * (256 /input_shape[b, 0]) # num_ground_box 2  （2,2） #这个尺寸不定，原图中有多少个groundTruth，就有几个WH
         if len(wh) == 0: continue
         # Expand dim to apply broadcasting.
         wh = np.expand_dims(wh, -2)  # num_ground_box 1  2
@@ -175,79 +231,6 @@ def preprocess_true_boxes(true_boxes, input_shape, anchors, num_classes):
                 y_true[b, j, i, k, 5 + c] = 1  # class
 
     return y_true
-
-def yolo_loss(args, anchors, num_classes, ignore_thresh=.5, print_loss=False):
-    '''Return yolo_loss tensor
-
-    Parameters
-    ----------
-    yolo_outputs: list of tensor, the output of yolo_body or tiny_yolo_body
-    y_true: list of array, the output of preprocess_true_boxes
-    anchors: array, shape=(N, 2), wh
-    num_classes: integer
-    ignore_thresh: float, the iou threshold whether to ignore object confidence loss
-
-    Returns
-    -------
-    loss: tensor, shape=(1,)
-
-    '''
-    num_layers = len(anchors) // 3  # default setting
-    yolo_outputs = args[:num_layers]
-    y_true = args[num_layers:]
-    anchor_mask = [[6, 7, 8], [3, 4, 5], [0, 1, 2]] if num_layers == 3 else [[3, 4, 5], [1, 2, 3]]
-    input_shape = K.cast(K.shape(yolo_outputs)[1:3] * 8, K.dtype(y_true[0]))
-    grid_shapes = [K.cast(K.shape(yolo_outputs)[1:3], K.dtype(y_true[0]))]
-    loss = 0
-    m = K.shape(yolo_outputs)[0]  # batch size, tensor
-    mf = K.cast(m, K.dtype(yolo_outputs))
-
-    object_mask = y_true[..., 4:5]  # confidence
-    true_class_probs = y_true[..., 5:]  # class
-
-    grid, raw_pred, pred_xy, pred_wh = yolo_head(yolo_outputs,
-                                                 anchors[anchor_mask[0]], num_classes, input_shape, calc_loss=True)
-    pred_box = K.concatenate([pred_xy, pred_wh])
-
-    # Darknet raw box to calculate loss.
-    raw_true_xy = y_true[..., :2] * grid_shapes[::-1] - grid
-    raw_true_wh = K.log(y_true[..., 2:4] / anchors[anchor_mask[0]] * input_shape[::-1])
-    raw_true_wh = K.switch(object_mask, raw_true_wh, K.zeros_like(raw_true_wh))  # avoid log(0)=-inf
-    box_loss_scale = 2 - y_true[..., 2:3] * y_true[..., 3:4]  # area
-
-    # Find ignore mask, iterate over each of batch.
-    ignore_mask = tf.TensorArray(K.dtype(y_true[0]), size=1, dynamic_size=True)  # all images label
-    object_mask_bool = K.cast(object_mask, 'bool')
-
-    def loop_body(b, ignore_mask):
-        true_box = tf.boolean_mask(y_true[b, ..., 0:4], object_mask_bool[b, ..., 0])  # object_mask_bool (confidence)
-        iou = box_iou(pred_box[b], true_box)
-        best_iou = K.max(iou, axis=-1)
-        ignore_mask = ignore_mask.write(b, K.cast(best_iou < ignore_thresh, K.dtype(true_box)))
-        return b + 1, ignore_mask
-
-    _, ignore_mask = K.control_flow_ops.while_loop(lambda b, *args: b < m, loop_body, [0, ignore_mask])
-    ignore_mask = ignore_mask.stack()
-    ignore_mask = K.expand_dims(ignore_mask, -1)
-
-    # K.binary_crossentropy is helpful to avoid exp overflow.
-    xy_loss = object_mask * box_loss_scale * K.binary_crossentropy(raw_true_xy, raw_pred[..., 0:2],
-                                                                   from_logits=True)
-    wh_loss = object_mask * box_loss_scale * 0.5 * K.square(raw_true_wh - raw_pred[..., 2:4])
-    confidence_loss = object_mask * K.binary_crossentropy(object_mask, raw_pred[..., 4:5], from_logits=True) + \
-                      (1 - object_mask) * K.binary_crossentropy(object_mask, raw_pred[..., 4:5],
-                                                                from_logits=True) * ignore_mask
-    class_loss = object_mask * K.binary_crossentropy(true_class_probs, raw_pred[..., 5:], from_logits=True)
-
-    xy_loss = K.sum(xy_loss) / mf
-    wh_loss = K.sum(wh_loss) / mf
-    confidence_loss = K.sum(confidence_loss) / mf
-    class_loss = K.sum(class_loss) / mf
-    loss += xy_loss + wh_loss + confidence_loss + class_loss
-    if print_loss:
-        loss = tf.Print(loss, [loss, xy_loss, wh_loss, confidence_loss, class_loss, K.sum(ignore_mask)],
-                        message='loss: ')
-    return loss
 
 
 def read_json(path):
@@ -303,4 +286,6 @@ true_boxes = np.array(true_boxes)
 print(true_boxes.shape)
 anchors = [[10, 14], [23, 27], [37, 58]]
 # TODO Yolo loss
-preprocess_true_boxes(true_boxes, imgs_shape, anchors, 4)
+y_true = preprocess_true_boxes(true_boxes, imgs_shape, anchors, 4)
+loss = yolo_loss(y_true,y_true, anchors, 4, ignore_thresh=.5, print_loss=False)
+a = 1
